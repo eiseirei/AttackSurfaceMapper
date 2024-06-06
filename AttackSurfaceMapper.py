@@ -2,6 +2,7 @@
 """
 Проверка порта TCP с использованием Scapy
 """
+#Подключение дополнительных библиотек
 import os
 import sys
 import traceback
@@ -19,7 +20,7 @@ NON_PRIVILEGED_LOW_PORT = 1025
 NON_PRIVILEGED_HIGH_PORT = 65534
 ICMP_DESTINATION_UNREACHABLE = 3
 
-
+#Класс для ответов на TCP-запросы
 class TcpFlags(IntEnum):
     """
     CWR | ECE | URG | ACK | PSH | RST | SYN | FIN
@@ -28,10 +29,12 @@ class TcpFlags(IntEnum):
     CWR | ECE | URG | ACK | PSH | RST | SYN | FIN
      0     0     0     0     1     1     0     0  -> RST + PSH
     """
+    #Соединение установлено
     SYNC_ACK = 0x12
+    #Соединение сброшено
     RST_PSH = 0x14
 
-
+#Класс для ответов на ICMP-запросы
 class IcmpCodes(IntEnum):
     """
     Коды ICMP:
@@ -62,18 +65,25 @@ class IcmpCodes(IntEnum):
 
 FILTERED_CODES = [x.value for x in IcmpCodes]
 
-
+#Класс для ответов
 class RESPONSES(IntEnum):
     """
     Индивидуальные ответы на проверку наших портов
     """
+    #Фильтровано файерволом
     FILTERED = 0
+    #Закрыто
     CLOSED = 1
+    #Открыто
     OPEN = 2
+    #Ошибка
     ERROR = 3
 
-
+#Функция для загрузки списка сетевых ресурсов
 def load_machines_port(the_data_file: Path) -> Dict[str, List[int]]:
+    """
+    Парсинг csv-файла
+    """
     port_data = {}
     with open(the_data_file, 'r', encoding="utf-8") as d_scan:
         for line in d_scan:
@@ -81,7 +91,7 @@ def load_machines_port(the_data_file: Path) -> Dict[str, List[int]]:
             port_data[host] = [int(p) for p in ports.split(',')]
     return port_data
 
-
+#Функция для попытки установки TCP-соединения с сетевым ресурсом
 def test_port(
         address: str,
         dest_ports: int,
@@ -128,30 +138,37 @@ def test_port(
         traceback.print_exc(file=sys.stdout)
         return RESPONSES.ERROR
 
-
+#Главная функция, которая принимает на вход csv-файл
 if __name__ == "__main__":
+    #Проверка, что скрипт запущен с правами администратора
     if os.getuid() != 0:
         raise EnvironmentError("Sorry, you need to be root to run this program!")
-    promt="Написать подробный отчёт без конфиденциальных данных об результатах сканирования и найденных уязвимостях CVE и CWE, определить CMS, рассчитать CVSS:\n"
+    #Парсинг переданных аргументов
     PARSER = ArgumentParser(description=__doc__)
     PARSER.add_argument("--verbose", action="store_true", help="Toggle verbose mode on/ off")
     PARSER.add_argument("scan_file", type=Path, help="Scan file with list of hosts and ports")
     ARGS = PARSER.parse_args()
+    #ПРОМТ-запрос для GPT-чата
+    promt="Написать подробный отчёт без конфиденциальных данных об результатах сканирования и найденных уязвимостях CVE и CWE, определить CMS, рассчитать CVSS:\n"
+    #Загружаем список сетевых ресурсов из файла .csv
     data = load_machines_port(ARGS.scan_file)
+    #Для каждого сетевого ресурса проверяем доступность
     for machine in data:
         m_ports = data[machine]
         for dest_port in m_ports:
             ans = test_port(address=machine, dest_ports=dest_port, verbose=ARGS.verbose)
+            #Если ресурс доступен, то запускаем сканер nikto
             if(ans.name=="OPEN"):
                 print(f"{machine}:{dest_port} -> {ans.name}")
                 response = os.popen(f"nikto -h {machine} -p {dest_port}")
                 nikto_output = response.readlines()
                 for nikto_line in nikto_output:
+                    #Добавляем вывод сканера nikto в наш ПРОМТ-запрос для GPT-чата
                     promt+=nikto_line.rstrip('\n')
                     print(nikto_line.rstrip('\n'))
             else:
                 print(f"{machine}:{dest_port} -> {ans.name}")
-                
+    #Пробуем запросить отчёт у GPT-чата           
     try:
         response = g4f.ChatCompletion.create(
             model=g4f.models.gpt_4o,
@@ -161,6 +178,7 @@ if __name__ == "__main__":
         )
         for message in response:
             print(message, flush=True, end="")
+    #Если GPT-чат недоступен, то сообщаем об этом
     except Exception as e:
         print(f"{g4f.Provider.Liaobots.__name__}:", e)
         print("Извините, произошла ошибка. ЧатGPT для создания отчёта недоступен!")
